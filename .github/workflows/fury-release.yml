@@ -1,0 +1,69 @@
+# Fury fork: builds the Windows and Linux x86_64 packages Fury consumes (thirdparty/binary-deps.manifest.json)
+# and attaches them to a GitHub release for tags such as v2026.20-fury.1. Upstream release.yml needs signing
+# secrets and build caches that only exist upstream, so it stays disabled on this fork.
+name: Fury Release
+
+on:
+  push:
+    tags:
+      - "v20[2-9][0-9].[0-9]*-fury.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, runs-on: windows-latest }
+          - { os: linux, runs-on: ubuntu-22.04 }
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup MSVC
+        if: matrix.os == 'windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Install Ninja
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Build
+        run: |
+          cmake --preset default --fresh \
+            -DSLANG_ENABLE_EXAMPLES=OFF \
+            -DSLANG_ENABLE_TESTS=OFF \
+            -DSLANG_ENABLE_SLANG_RHI=OFF \
+            -DSLANG_ENABLE_GFX=OFF \
+            -DSLANG_ENABLE_RELEASE_LTO=ON \
+            -DSLANG_STANDARD_MODULE_DEVELOP_BUILD=OFF \
+            -DSLANG_SLANG_LLVM_FLAVOR=DISABLE
+          cmake --build --preset release
+
+      - name: Package
+        id: package
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          base=slang-${version}-${{ matrix.os }}-x86_64
+          cpack --preset release -G ZIP
+          mv build/dist-release/slang.zip "${base}.zip"
+          sha256sum "${base}.zip" | tee "${base}.zip.sha256"
+          echo "zip=${base}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Fury fork build of $(git describe --tags --abbrev=0 --exclude '*-fury.*') with WGSL fixes; see the branch history for patches." || true
+          gh release upload "$GITHUB_REF_NAME" "${{ steps.package.outputs.zip }}" "${{ steps.package.outputs.zip }}.sha256" --clobber

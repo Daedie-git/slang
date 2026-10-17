@@ -3119,6 +3119,15 @@ private:
                     layoutDecor->removeAndDeallocate();
                     continue;
                 }
+                else if (
+                    auto interpolationDecor = key->findDecoration<IRInterpolationModeDecoration>())
+                {
+                    // The stage interface owns interpolation after legalization. The original
+                    // struct is now an ordinary value type: WGSL cannot interpolate a member
+                    // without a location, even when its source field was `nointerpolation`.
+                    interpolationDecor->removeAndDeallocate();
+                    continue;
+                }
                 break;
             }
         }
